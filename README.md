@@ -91,7 +91,7 @@ no installer, no network, no telemetry. The UI is in Chinese.*
 需要 **Windows + .NET 8 SDK**（[下载](https://dotnet.microsoft.com/download/dotnet/8.0)）。
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/Vear-ximao/CapAlert.git
 cd CapAlert
 
 # 编译（调试）
@@ -135,6 +135,10 @@ docs/             使用说明、快速上手、版本变更
 ```
 
 分层纪律：**UI 不碰文件、Core 不碰控件、P/Invoke 只出现在 Platform/NativeMethods.cs**。
+
+> 命名说明：产品名是 **CapAlert / 截图提醒**，但代码内部的工程名与命名空间保留了历史命名 `ScreenRemind`
+> （目录 `src/ScreenRemind/`、`RootNamespace=ScreenRemind`）。改它要动 csproj、命名空间和 CI 路径，
+> 收益不大，故保持稳定；你只需认准产品名。
 
 ---
 
