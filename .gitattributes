@@ -1,0 +1,16 @@
+# 统一换行：仓库内文本用 LF，检出到 Windows 工作区时自动转 CRLF
+* text=auto
+
+*.cs        text diff=csharp
+*.csproj    text
+*.md        text
+*.yml       text
+*.json      text
+*.manifest  text
+
+*.ico       binary
+*.png       binary
+*.zip       binary
+
+# 中文文档也按文本处理，避免 GitHub 显示为二进制
+*.txt       text

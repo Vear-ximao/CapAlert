@@ -1,0 +1,44 @@
+name: build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: 编译主程序
+        run: dotnet build src/ScreenRemind/ScreenRemind.csproj -c Release
+
+      - name: 跑逻辑自检
+        run: dotnet run --project tests/SelfTest/SelfTest.csproj -c Release
+
+      - name: 验证单文件发布产物
+        run: dotnet publish src/ScreenRemind/ScreenRemind.csproj -c Release -o out
+
+      - name: 生成运行期诊断报告
+        run: |
+          .\out\截图提醒.exe --check
+          if ($LASTEXITCODE -ne 0) { throw "诊断未通过，退出码 $LASTEXITCODE" }
+        shell: pwsh
+
+      - name: 上传诊断报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: selfcheck-report
+          # 用 runner.temp 而不是 env.TEMP：后者在表达式上下文里取不到值
+          path: ${{ runner.temp }}/ScreenRemindSelfCheck/**/logs/selfcheck_*.txt
+          if-no-files-found: warn

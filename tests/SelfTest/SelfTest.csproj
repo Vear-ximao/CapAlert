@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>SelfTest</AssemblyName>
+    <RootNamespace>SelfTest</RootNamespace>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <InvariantGlobalization>false</InvariantGlobalization>
+  </PropertyGroup>
+
+  <!-- 直接把 Core 源码编进来做白盒验证，不依赖 UI 与 P/Invoke -->
+  <ItemGroup>
+    <Compile Include="..\..\src\ScreenRemind\Core\*.cs" />
+  </ItemGroup>
+
+</Project>

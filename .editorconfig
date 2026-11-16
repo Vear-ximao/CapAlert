@@ -1,0 +1,25 @@
+root = true
+
+[*]
+charset = utf-8
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{md,txt}]
+trim_trailing_whitespace = false
+
+[*.{csproj,props,targets,xml,yml,yaml}]
+indent_size = 2
+
+[*.cs]
+# 命名与可读性
+dotnet_sort_system_directives_first = true
+csharp_new_line_before_open_brace = all
+csharp_style_var_for_built_in_types = false:suggestion
+csharp_style_var_when_type_is_apparent = true:suggestion
+csharp_prefer_braces = when_multiline:suggestion
+
+# 本项目约定：关键逻辑写中文注释
+dotnet_diagnostic.CS1591.severity = none

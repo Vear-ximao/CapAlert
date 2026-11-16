@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>截图提醒</AssemblyName>
+    <RootNamespace>ScreenRemind</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>assets\app.ico</ApplicationIcon>
+    <Version>1.3.1</Version>
+    <Product>截图提醒</Product>
+    <Company>便携工具</Company>
+    <DebugType>none</DebugType>
+    <SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <!-- WFAC010：DPI 感知刻意走 app.manifest（进程启动即生效，先于任何窗口创建），
+         不采用 SetHighDpiMode 运行时切换，故屏蔽该建议 -->
+    <NoWarn>WFAC010;CA1416</NoWarn>
+    <!-- 单文件自包含发布：目标机无需安装 .NET 运行时 -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <TRACE>false</TRACE>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,39 @@
+# ---- .NET 构建产物 ----
+[Bb]in/
+[Oo]bj/
+out/
+publish/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# ---- 发布/打包产物 ----
+*.exe
+*.pdb
+*.dll
+!src/ScreenRemind/assets/**
+release/
+dist/
+
+# ---- 运行时数据（用户数据绝不入库）----
+data/
+shots/
+logs/
+backups/
+截图提醒-数据位置.txt
+*.lnk
+*.zip
+
+# ---- 编辑器 / 系统 ----
+.vs/
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# ---- 诊断产物 ----
+selfcheck_*.txt
+*.corrupt_*
