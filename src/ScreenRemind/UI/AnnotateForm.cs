@@ -141,7 +141,7 @@ public sealed class AnnotateForm : Form
         var maxH = (int)(area.Height * 0.86);
         var w = Math.Min(source.Width + 24, maxW);
         var h = Math.Min(source.Height + 108, maxH);
-        // 左侧工具区到「清空」右边界需要 548，右区固定 210：总宽低于 758 会挤压工具按钮。
+        // 左侧工具区到「清空」右边界 580，右区固定 210：总宽低于 790 会挤压工具按钮。
         // 下限提到 800，并用 MinimumSize 防止用户把窗口拖到按钮被裁。
         ClientSize = new Size(Math.Max(800, w), Math.Max(480, h));
         MinimumSize = SizeFromClientSize(new Size(800, 480));
@@ -170,14 +170,17 @@ public sealed class AnnotateForm : Form
         void AddTool(Tool tool, string text)
         {
             var b = Theme.GhostButton(text);
-            b.Width = 62;
+            b.Width = 66;
             b.Height = 32;
+            // GhostButton 默认左右各 8px 内边距，66 宽只剩 48px 可用，「马赛克」三个字会被挤到下一行。
+            // 文字本来就居中，收窄内边距只扩内容区、不改变观感。
+            b.Padding = new Padding(2, 0, 2, 0);
             b.Left = x;
             b.Top = 10;
             b.Click += (_, _) => SelectTool(tool);
             leftHost.Controls.Add(b);
             _toolButtons[tool] = b;
-            x += 66;
+            x += 70;
         }
 
         AddTool(Tool.Rect, "框选");
@@ -188,25 +191,25 @@ public sealed class AnnotateForm : Form
 
         x += 12;
         _undoBtn = Theme.GhostButton("撤销");
-        _undoBtn.Width = 62;
+        _undoBtn.Width = 66;
         _undoBtn.Height = 32;
         _undoBtn.Left = x;
         _undoBtn.Top = 10;
         _undoBtn.Click += (_, _) => Undo();
         leftHost.Controls.Add(_undoBtn);
-        x += 66;
+        x += 70;
 
         _redoBtn = Theme.GhostButton("重做");
-        _redoBtn.Width = 62;
+        _redoBtn.Width = 66;
         _redoBtn.Height = 32;
         _redoBtn.Left = x;
         _redoBtn.Top = 10;
         _redoBtn.Click += (_, _) => Redo();
         leftHost.Controls.Add(_redoBtn);
-        x += 66;
+        x += 70;
 
         var clear = Theme.GhostButton("清空");
-        clear.Width = 62;
+        clear.Width = 66;
         clear.Height = 32;
         clear.Left = x;
         clear.Top = 10;
