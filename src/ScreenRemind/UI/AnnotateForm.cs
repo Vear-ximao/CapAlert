@@ -141,7 +141,10 @@ public sealed class AnnotateForm : Form
         var maxH = (int)(area.Height * 0.86);
         var w = Math.Min(source.Width + 24, maxW);
         var h = Math.Min(source.Height + 108, maxH);
-        ClientSize = new Size(Math.Max(680, w), Math.Max(480, h));
+        // 左侧工具区到「清空」右边界需要 548，右区固定 210：总宽低于 758 会挤压工具按钮。
+        // 下限提到 800，并用 MinimumSize 防止用户把窗口拖到按钮被裁。
+        ClientSize = new Size(Math.Max(800, w), Math.Max(480, h));
+        MinimumSize = SizeFromClientSize(new Size(800, 480));
 
         // 先建画布，后面的按钮回调会用到
         _canvas = new AnnotateCanvas(source, _shapes) { Dock = DockStyle.Fill };
@@ -153,7 +156,15 @@ public sealed class AnnotateForm : Form
             UpdateHistoryButtons();
         };
 
-        var bar = new Panel { Dock = DockStyle.Top, Height = 52, BackColor = Theme.Card, Padding = new Padding(12, 9, 12, 9) };
+        // 工具栏左右分区：
+        // 旧实现左按钮用固定 Left 累加、右侧「完成/取消」用 PinRight 贴右，两套坐标各算各的，
+        // 窗口宽 < 744 时「完成」会压住「清空」（用户实测默认宽度下看不到完成按钮）。
+        // 改为右侧固定宽度的 Dock 容器 + 左侧填充容器：右区永远优先占位，左侧再窄也盖不住「完成」。
+        var bar = new Panel { Dock = DockStyle.Top, Height = 52, BackColor = Theme.Card };
+
+        const int RightHostWidth = 210;   // 完成86 + 间隔12 + 取消76 + 右边距24 + 左余量12
+        var rightHost = new Panel { Dock = DockStyle.Right, Width = RightHostWidth, BackColor = Theme.Card };
+        var leftHost = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Card };
 
         var x = 12;
         void AddTool(Tool tool, string text)
@@ -164,7 +175,7 @@ public sealed class AnnotateForm : Form
             b.Left = x;
             b.Top = 10;
             b.Click += (_, _) => SelectTool(tool);
-            bar.Controls.Add(b);
+            leftHost.Controls.Add(b);
             _toolButtons[tool] = b;
             x += 66;
         }
@@ -182,7 +193,7 @@ public sealed class AnnotateForm : Form
         _undoBtn.Left = x;
         _undoBtn.Top = 10;
         _undoBtn.Click += (_, _) => Undo();
-        bar.Controls.Add(_undoBtn);
+        leftHost.Controls.Add(_undoBtn);
         x += 66;
 
         _redoBtn = Theme.GhostButton("重做");
@@ -191,7 +202,7 @@ public sealed class AnnotateForm : Form
         _redoBtn.Left = x;
         _redoBtn.Top = 10;
         _redoBtn.Click += (_, _) => Redo();
-        bar.Controls.Add(_redoBtn);
+        leftHost.Controls.Add(_redoBtn);
         x += 66;
 
         var clear = Theme.GhostButton("清空");
@@ -200,7 +211,7 @@ public sealed class AnnotateForm : Form
         clear.Left = x;
         clear.Top = 10;
         clear.Click += (_, _) => ClearAll();
-        bar.Controls.Add(clear);
+        leftHost.Controls.Add(clear);
         _clearBtn = clear;
 
         UpdateHistoryButtons();
@@ -217,23 +228,24 @@ public sealed class AnnotateForm : Form
             BackColor = Theme.Card
         };
 
+        // 右区坐标在固定宽度容器内计算，不依赖窗口宽度，因此不存在被左侧覆盖的可能
         var cancel = Theme.GhostButton("取消");
-        cancel.Width = 76;
-        cancel.SetBounds(0, 10, 76, 32);
+        cancel.SetBounds(RightHostWidth - 24 - 76, 10, 76, 32);
         cancel.Click += (_, _) =>
         {
             DialogResult = DialogResult.Cancel;
             Close();
         };
-        bar.Controls.Add(cancel);
-        Theme.PinRight(cancel, 24);
+        rightHost.Controls.Add(cancel);
 
         var done = Theme.PrimaryButton("完成");
-        done.Width = 86;
-        done.SetBounds(0, 10, 86, 32);
+        done.SetBounds(RightHostWidth - 24 - 76 - 12 - 86, 10, 86, 32);
         done.Click += (_, _) => Compose();
-        bar.Controls.Add(done);
-        Theme.PinRight(done, 110);
+        rightHost.Controls.Add(done);
+
+        // 后添加的控件先参与 Dock：rightHost 先占右侧固定宽度，leftHost 再填充剩余
+        bar.Controls.Add(leftHost);
+        bar.Controls.Add(rightHost);
 
         Controls.Add(_canvas);
         Controls.Add(tip);
