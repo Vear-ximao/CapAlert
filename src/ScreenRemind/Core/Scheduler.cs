@@ -11,6 +11,7 @@ public sealed class Scheduler : IDisposable
     private readonly System.Windows.Forms.Timer _timer;
     private readonly TaskRepository _repo;
     private readonly Func<AppConfig> _config;
+    private readonly Func<DateTime> _now;
     /// <summary>已弹出但用户还没处理的任务，避免每秒重复弹</summary>
     private readonly HashSet<string> _inflight = new();
     private DateTime _lastTick = DateTime.Now;
@@ -22,21 +23,27 @@ public sealed class Scheduler : IDisposable
     /// <summary>预提醒（正式提醒前的轻提示）</summary>
     public event EventHandler<RemindTask>? PreNotify;
 
+    /// <summary>一次性顺延发生（供托盘文案/统计订阅）；Core 不直接碰 UI。</summary>
+    internal event EventHandler<(RemindTask Task, DateTime Until, DeferKind Kind)>? NotifyDefer;
+
     public bool Paused { get; set; }
 
-    public Scheduler(TaskRepository repo, Func<AppConfig> config)
+    /// <param name="nowProvider">时钟注入缝；自检可注入确定性时刻，默认使用系统墙钟。</param>
+    public Scheduler(TaskRepository repo, Func<AppConfig> config, Func<DateTime>? nowProvider = null)
     {
         _repo = repo;
         _config = config;
+        _now = nowProvider ?? (() => DateTime.Now);
+        _lastTick = _now();
         _timer = new System.Windows.Forms.Timer { Interval = 1000 };
-        _timer.Tick += (_, _) => Tick();
+        _timer.Tick += (_, _) => OnTimerTick();
     }
 
     public void Start()
     {
-        _lastTick = DateTime.Now;
+        _lastTick = _now();
         _timer.Start();
-        Tick();   // 启动立刻扫一次，补偿上次关机期间漏掉的
+        TickCore(_now());   // 启动立刻扫一次，补偿上次关机期间漏掉的
     }
 
     public void Stop() => _timer.Stop();
@@ -54,21 +61,31 @@ public sealed class Scheduler : IDisposable
     }
 
     /// <summary>新任务创建后立即评估一次，避免「刚建完等下一秒」的观感延迟。</summary>
-    public void Poke() => Tick();
+    public void Poke() => TickCore(_now());
 
-    private void Tick()
+    /// <summary>Timer 回调入口：从注入时钟取当前时刻。</summary>
+    private void OnTimerTick() => TickCore(_now());
+
+    /// <summary>自检注入时刻的测试缝；与 Timer 回调共用同一套逻辑。</summary>
+    internal void Tick(DateTime now) => TickCore(now);
+
+    private void TickCore(DateTime now)
     {
         if (_ticking) return;
         _ticking = true;
         try
         {
-            var now = DateTime.Now;
             var jump = (now - _lastTick).TotalSeconds;
+            var clockWentBack = now < _lastTick.AddMinutes(-2);   // C-17：墙钟回拨只告警，不强行改写调度
             _lastTick = now;
 
             if (jump > 90)
             {
                 Log.Info($"时间跳跃 {jump:F0} 秒（可能刚从睡眠/休眠恢复），开始检查漏提醒");
+            }
+            if (clockWentBack)
+            {
+                Log.Warn($"检测到系统时间回拨 {(-jump / 60):F0} 分钟，按墙钟继续调度");
             }
 
             if (Paused) return;
@@ -87,16 +104,26 @@ public sealed class Scheduler : IDisposable
 
                 if (fireAt <= now)
                 {
-                    // 免打扰时段：不弹窗，顺延到时段结束
+                    // 免打扰时段：不弹窗，顺延「本次生效时刻」，绝不改写计划锚点 TriggerAt（INV-1）
                     if (cfg.QuietEnabled && IsInQuiet(now, cfg))
                     {
                         var resume = QuietEnd(now, cfg);
-                        task.TriggerAt = resume;
-                        task.SnoozeUntil = null;
+                        task.SnoozeUntil = resume;                 // 唯一写入点
+                        task.DeferKind = DeferKind.Quiet;
                         task.PreNotifiedAt = null;
+                        // 【禁止】task.TriggerAt = resume;        旧实现会污染计划锚点
+                        // 【禁止】task.SnoozeUntil = null;        旧实现会抹掉本次顺延
                         _repo.Update(task);
-                        Log.Info($"任务 {task.Id} 落在免打扰时段，顺延至 {resume:yyyy-MM-dd HH:mm}");
+                        Log.Info($"任务 {task.Id} 落在免打扰时段，本次顺延至 {resume:yyyy-MM-dd HH:mm}（计划锚点仍为 {task.PlanAnchor:HH:mm}）");
+                        NotifyDefer?.Invoke(this, (task, resume, DeferKind.Quiet));
                         continue;
+                    }
+
+                    // 过期补弹：仅标记来源，不计 DoneCount、不写 TriggerAt（INV-3）
+                    if (fireAt < now.AddMinutes(-1))
+                    {
+                        task.DeferKind = DeferKind.Missed;
+                        Log.Info($"任务 {task.Id} 为过期补弹（计划 {fireAt:MM-dd HH:mm}，现 {now:MM-dd HH:mm}）");
                     }
 
                     _inflight.Add(task.Id);
@@ -104,10 +131,10 @@ public sealed class Scheduler : IDisposable
                     continue;
                 }
 
-                // 预提醒：只在正式提醒之前触发一次
-                if (task.PreNotifyMinutes > 0 && task.State == TaskState.Pending && task.PreNotifiedAt == null)
+                // 预提醒：只在正式提醒之前触发一次；顺延后锚点可能已过去，必须用本次生效时刻计算
+                if (task.PreNotifyMinutes > 0 && task.State != TaskState.Done && task.PreNotifiedAt == null)
                 {
-                    var minutesLeft = (task.TriggerAt - now).TotalMinutes;
+                    var minutesLeft = (task.EffectiveTime - now).TotalMinutes;
                     if (minutesLeft <= task.PreNotifyMinutes)
                     {
                         task.PreNotifiedAt = now;

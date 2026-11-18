@@ -169,7 +169,7 @@ public sealed class SettingsForm : Form
         AddSection("系统", ref y);
         _autoStart.SetBounds(28, y, 320, 24);
         _autoStart.Text = "开机自动启动（在启动文件夹放快捷方式）";
-        _autoStart.Checked = AutoStart.Exists;
+        _autoStart.Checked = app.Config.AutoStart;   // C-19：以配置为准，不被遗留快捷方式反向改写
         Controls.Add(_autoStart);
 
         _passwordBtn = Theme.GhostButton(_draft.HasPassword ? "修改/清除密码" : "设置主界面密码");
@@ -494,6 +494,16 @@ public sealed class SettingsForm : Form
 
         if (MessageBox.Show(this, "还原会覆盖当前任务与同名图片，确定继续？", "还原备份",
                 MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) return;
+
+        // C-16：还原前自动留一份“还原前备份”，失败时可手动退回
+        try
+        {
+            BackupService.CreateBackup(out _, out _);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn("还原前备份失败：" + ex.Message);
+        }
 
         var count = BackupService.Restore(dlg.FileName, out var error);
         if (error != null)

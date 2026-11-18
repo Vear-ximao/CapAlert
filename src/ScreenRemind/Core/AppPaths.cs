@@ -60,6 +60,22 @@ public static class AppPaths
         return Path.Combine(drive + Path.DirectorySeparatorChar, "截图提醒");
     }
 
+    /// <summary>
+    /// 诊断专用：无条件把数据根指向指定临时目录，并清掉缓存。
+    /// 与 SetRoot 的区别：不写「数据位置.txt」标记、不改用户真实数据位置，只影响当前进程。
+    /// 这样诊断模式下 ConfigFile/TasksFile/Shots/Logs 全部落到临时目录，绝不碰用户真实数据。
+    /// </summary>
+    public static void UseTempRoot(string path)
+    {
+        var full = Path.GetFullPath(path);
+        Directory.CreateDirectory(full);
+        Environment.SetEnvironmentVariable("SCREENREMIND_HOME", full);
+        _root = full;   // 关键：Root 是静态缓存，必须一并重置，否则环境变量改了也不生效
+    }
+
+    /// <summary>清掉 Root 缓存，使下一次访问按当前环境变量/标记重新解析（诊断恢复用）。</summary>
+    public static void ResetRootCache() => _root = null;
+
     /// <summary>设定数据目录并写入标记文件（目录会被创建）。</summary>
     public static void SetRoot(string path)
     {

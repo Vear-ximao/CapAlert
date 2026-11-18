@@ -28,21 +28,24 @@ internal static class Program
         // 装配自检：真正把托盘、热键、调度器跑起来 2 秒再退出，验证启动链路无异常
         if (args.Any(a => a.Equals("--check-ui", StringComparison.OrdinalIgnoreCase)))
         {
+            var uiFailed = false;
             try
             {
                 Diagnostics.UseTempDataIfUnset();
-                using var probe = new AppController();
-                probe.Start();
+                // 只读：跳过 PruneDone 等数据维护副作用（C-20）
+                using var probe = new AppController { SkipMaintenance = true };
                 var timer = new System.Windows.Forms.Timer { Interval = 2000 };
                 timer.Tick += (_, _) =>
                 {
                     timer.Stop();
                     timer.Dispose();
-                    probe.Shutdown();
+                    try { probe.Shutdown(); }
+                    catch (Exception ex) { Log.Error("装配自检关闭失败", ex); uiFailed = true; }
                 };
+                probe.Start();
                 timer.Start();
                 Application.Run(probe);
-                Environment.ExitCode = 0;
+                Environment.ExitCode = uiFailed ? 3 : 0;
             }
             catch (Exception ex)
             {

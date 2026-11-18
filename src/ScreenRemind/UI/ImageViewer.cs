@@ -37,6 +37,14 @@ public sealed class ImageViewer : Control
     public bool HasImage => _display != null;
     public float Zoom => _zoom;
 
+    /// <summary>看图进度文案（如「第 2 / 共 5 张」），由宿主设置；null/空则不绘制（C-21）。</summary>
+    private string? _progressText;
+    public string? ProgressText
+    {
+        get => _progressText;
+        set { _progressText = value; Invalidate(); }
+    }
+
     public void SetImage(Bitmap? bmp, bool takeOwnership = false)
     {
         if (_ownsSource) _source?.Dispose();
@@ -120,11 +128,22 @@ public sealed class ImageViewer : Control
         e.Graphics.Clear(Theme.ViewerBg);
         if (_display == null)
         {
-            using var br = new SolidBrush(Color.FromArgb(150, 156, 168));
-            using var f = new Font(Theme.FontFamily, 10F);
-            var text = "原图已丢失（文件可能被移动或删除）";
-            var size = e.Graphics.MeasureString(text, f);
-            e.Graphics.DrawString(text, f, br, (Width - size.Width) / 2, (Height - size.Height) / 2);
+            // C-21 异常态：虚线框 + 两级文案，而不是深色空白里一行小字
+            float CenterX(string text, Font font) => (ClientSize.Width - e.Graphics.MeasureString(text, font).Width) / 2f;
+
+            using var line = new Pen(Theme.CalendarMuted, 1.5f) { DashStyle = DashStyle.Dash };
+            var box = new Rectangle(ClientSize.Width / 2 - 150, ClientSize.Height / 2 - 56, 300, 112);
+            e.Graphics.DrawRectangle(line, box);
+
+            using var head = new Font(Theme.FontFamily, 13F, FontStyle.Bold);
+            using var hint = new Font(Theme.FontFamily, 9.5F);
+            // 深色查看器上必须用浅色标题：Theme.TextPrimary 是深色正文色，画在这里会淹没在背景里
+            using var headBrush = new SolidBrush(Color.White);
+            using var hintBrush = new SolidBrush(Theme.ViewerText);
+            var title = "原图文件已丢失";
+            var detail = "可能被移动或删除；你仍可正常处理这条提醒";
+            e.Graphics.DrawString(title, head, headBrush, CenterX(title, head), box.Y + 24);
+            e.Graphics.DrawString(detail, hint, hintBrush, CenterX(detail, hint), box.Y + 64);
             return;
         }
 
@@ -134,6 +153,19 @@ public sealed class ImageViewer : Control
 
         var dest = new RectangleF(_offset.X, _offset.Y, _display.Width * _zoom, _display.Height * _zoom);
         e.Graphics.DrawImage(_display, dest);
+
+        // C-21：第二张起在右上角显示「第 X / 共 N 张」，多图链不再靠用户自己数
+        if (!string.IsNullOrEmpty(_progressText))
+        {
+            using var f = new Font(Theme.FontFamily, 10F);
+            using var bg = new SolidBrush(Theme.ViewerOverlay);
+            using var fg = new SolidBrush(Theme.ViewerText);
+            var size = e.Graphics.MeasureString(_progressText, f);
+            var x = Width - size.Width - 14;
+            var y = 10f;
+            e.Graphics.FillRectangle(bg, x - 6, y - 3, size.Width + 12, size.Height + 6);
+            e.Graphics.DrawString(_progressText, f, fg, x, y);
+        }
     }
 
     protected override void OnMouseWheel(MouseEventArgs e)

@@ -30,6 +30,8 @@ internal static class Program
         Run("免打扰时段", QuietTests.Run);
         Run("密码", PasswordTests.Run);
         Run("备份还原", BackupTests.Run);
+        Run("锚点与出口逻辑", AnchorFlowTests.Run);
+        Run("第二轮残留修复", Round2FixTests.Run);
 
         Console.WriteLine($"\n===== 通过 {_pass}　失败 {_fail} =====");
 

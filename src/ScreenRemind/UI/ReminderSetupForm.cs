@@ -342,6 +342,9 @@ public sealed class ReminderSetupForm : Form
         });
 
         _repeatHost.BackColor = Theme.Bg;
+        // C-21 保守体验：给重复选项区统一内边距（Panel 的 Padding 会作用于 Dock.Fill 子面板），
+        // 不改变控件相对坐标，只整体内缩，缓解长表单的拥挤感；深度美化留给第三波。
+        _repeatHost.Padding = new Padding(12, 4, 12, 4);
         _repeatHost.Controls.AddRange(new Control[] { _pNone, _pInterval, _pDaily, _pWeekly, _pMonthly, _pYearMonths });
         foreach (Control panel in _repeatHost.Controls)
         {
@@ -362,11 +365,11 @@ public sealed class ReminderSetupForm : Form
 
     private int RepeatPanelHeight() => _repeatType.SelectedIndex switch
     {
-        1 => 36,          // 每隔 N
-        3 => 30,          // 每周
-        4 => 32,          // 每月
-        5 => 98,          // 指定月份（两行月份 + 日）
-        _ => 26           // 不重复 / 每天
+        1 => 44,          // 每隔 N（含 8px 内边距）
+        3 => 38,          // 每周
+        4 => 40,          // 每月
+        5 => 106,         // 指定月份（两行月份 + 日）
+        _ => 34           // 不重复 / 每天
     };
 
     // ---------------- 结束条件 ----------------
@@ -573,32 +576,33 @@ public sealed class ReminderSetupForm : Form
             return;
         }
 
-        _repeatType.SelectedIndex = (int)preset.Type;
-        _intervalValue.Value = Math.Clamp(preset.IntervalValue, 1, 99999);
-        _intervalUnit.SelectedIndex = (int)preset.IntervalUnit;
+        var safe = RepeatEngine.Sanitize(preset);   // C-4：脏数据防御，消除 foreach(null) NRE
+        _repeatType.SelectedIndex = (int)safe.Type;
+        _intervalValue.Value = Math.Clamp(safe.IntervalValue, 1, 99999);
+        _intervalUnit.SelectedIndex = (int)safe.IntervalUnit;
 
-        foreach (var d in preset.Weekdays)
+        foreach (var d in safe.Weekdays)
         {
             var idx = d == 0 ? 6 : d - 1;
             if (idx is >= 0 and <= 6) _weekdayBoxes[idx].Checked = true;
         }
 
-        _monthDay.Value = Math.Clamp(preset.DayOfMonth, 1, 31);
-        foreach (var m in preset.Months)
+        _monthDay.Value = Math.Clamp(safe.DayOfMonth, 1, 31);
+        foreach (var m in safe.Months)
         {
             if (m is >= 1 and <= 12) _monthBoxes[m - 1].Checked = true;
         }
-        _yearMonthDay.Value = Math.Clamp(preset.DayOfMonth, 1, 31);
+        _yearMonthDay.Value = Math.Clamp(safe.DayOfMonth, 1, 31);
 
-        if (preset.MaxCount.HasValue)
+        if (safe.MaxCount.HasValue)
         {
             _endType.SelectedIndex = 2;
-            _countNum.Value = Math.Clamp(preset.MaxCount.Value, 1, 9999);
+            _countNum.Value = Math.Clamp(safe.MaxCount.Value, 1, 9999);
         }
-        else if (preset.Until.HasValue)
+        else if (safe.Until.HasValue)
         {
             _endType.SelectedIndex = 1;
-            _untilPicker.Value = preset.Until.Value;
+            _untilPicker.Value = safe.Until.Value;
         }
 
         ApplyRepeatVisibility();

@@ -10,6 +10,7 @@ public sealed class TaskListForm : Form
     private readonly ImageList _thumbs = new() { ImageSize = new Size(48, 48), ColorDepth = ColorDepth.Depth32Bit };
     private readonly Label _stats = new();
     private readonly CheckBox _showDone = new() { Text = "显示已完成", AutoSize = true };
+    private readonly EmptyStatePanel _emptyState = new();   // 空列表引导（GDI 自绘，无图片资源）
 
     public TaskListForm(AppController app)
     {
@@ -81,7 +82,9 @@ public sealed class TaskListForm : Form
         _stats.ForeColor = Theme.SubText;
         bottom.Controls.Add(_stats);
 
+        _emptyState.Visible = false;
         Controls.Add(_list);
+        Controls.Add(_emptyState);   // 空态插图盖在列表上，有任务时隐藏
         Controls.Add(bottom);
         Controls.Add(bar);
 
@@ -137,6 +140,8 @@ public sealed class TaskListForm : Form
                 .Where(t => _showDone.Checked || t.State != TaskState.Done)
                 .OrderBy(t => t.EffectiveTime)
                 .ToList();
+
+            _emptyState.Visible = tasks.Count == 0;
 
             foreach (var task in tasks)
             {
@@ -258,15 +263,13 @@ public sealed class TaskListForm : Form
         {
             menu.Items.Add("跳过下一次", null, (_, _) =>
             {
-                var next = RepeatEngine.NextAfter(task.Repeat, task.TriggerAt);
+                // C-11：与 Acknowledge 共用计数语义，沿计划锚点前进一格（纯函数内完成）
+                var next = RepeatFlow.SkipNext(task, DateTime.Now);
                 if (next == null)
                 {
                     MessageBox.Show(this, "这条提醒链已经结束，没有下一次了。", "跳过", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return;
                 }
-                task.TriggerAt = next.Value;
-                task.SnoozeUntil = null;
-                task.PreNotifiedAt = null;
                 _app.Repo.Update(task);
                 _app.Scheduler.MarkHandled(task.Id);
                 _app.Notify($"已跳到下一次：{next:yyyy-MM-dd HH:mm}");

@@ -336,3 +336,280 @@ internal static class BackupTests
         Program.Check("还原后配置回来了", File.Exists(configPath));
     }
 }
+
+/// <summary>
+/// R1–R7：锚点重构后的回归断言。设计文档第 7 章。
+/// 注：Interval 规则的「相位」是起算点 + N×间隔，其 TimeOfDay 天然逐点变化，
+/// 因此 R1 对 Interval 用「差值是间隔的整数倍」判定，其余日历类规则用 TimeOfDay 相等判定。
+/// </summary>
+internal static class AnchorFlowTests
+{
+    public static void Run()
+    {
+        R1_ThreeArgPhase();
+        R2_ExitRouting();
+        R3_QuietAnchor();
+        R4_DoneCount();
+        R5_DirtyData();
+        R6_TimeJump();
+        R7_BackupSafety();
+    }
+
+    private static void R1_ThreeArgPhase()
+    {
+        var cases = new (RepeatRule Rule, DateTime Anchor, DateTime Now, string Label)[]
+        {
+            (new RepeatRule { Type = RepeatType.Interval, IntervalValue = 5, IntervalUnit = IntervalUnit.Minute },
+                new DateTime(2026, 11, 16, 9, 0, 0), new DateTime(2026, 11, 16, 9, 15, 0), "Interval 5min 09:00→09:20"),
+            (new RepeatRule { Type = RepeatType.Daily },
+                new DateTime(2026, 11, 16, 13, 52, 0), new DateTime(2026, 11, 18, 15, 0, 0), "Daily 13:52 → 11-19 13:52"),
+            (new RepeatRule { Type = RepeatType.Weekly, Weekdays = new List<int> { 1, 3, 5 } },
+                new DateTime(2026, 11, 16, 9, 0, 0), new DateTime(2026, 11, 28, 10, 0, 0), "Weekly 一三五 09:00"),
+            (new RepeatRule { Type = RepeatType.Monthly, DayOfMonth = 31 },
+                new DateTime(2026, 1, 31, 9, 0, 0), new DateTime(2026, 3, 15, 10, 0, 0), "Monthly 31 号 09:00"),
+            (new RepeatRule { Type = RepeatType.YearMonths, Months = new List<int> { 3, 6, 9, 12 }, DayOfMonth = 15 },
+                new DateTime(2026, 11, 16, 9, 0, 0), new DateTime(2026, 12, 20, 10, 0, 0), "YearMonths 15 号 09:00")
+        };
+
+        foreach (var (rule, anchor, now, label) in cases)
+        {
+            var next = RepeatEngine.NextAfter(rule, anchor, now);
+            Program.Check("R1 " + label + "：next 存在且 > now", next.HasValue && next.Value > now,
+                $"next={next?.ToString("yyyy-MM-dd HH:mm") ?? "null"}, now={now:yyyy-MM-dd HH:mm}");
+            if (!next.HasValue) continue;
+
+            if (rule.Type == RepeatType.Interval)
+            {
+                var stepTicks = TimeSpan.FromMinutes(rule.IntervalValue).Ticks;
+                Program.Check("R1 " + label + "：相位不漂（整倍间隔）",
+                    (next.Value - anchor).Ticks % stepTicks == 0, $"delta={(next.Value - anchor)}");
+            }
+            else
+            {
+                Program.Equal("R1 " + label + "：相位不漂（TimeOfDay）", anchor.TimeOfDay, next.Value.TimeOfDay);
+            }
+        }
+
+        // 文档给出的两条具体期望值
+        var interval = new RepeatRule { Type = RepeatType.Interval, IntervalValue = 5, IntervalUnit = IntervalUnit.Minute };
+        Program.Equal("R1 Interval 09:00 + now 09:15 → 09:20", new DateTime(2026, 11, 16, 9, 20, 0),
+            RepeatEngine.NextAfter(interval, new DateTime(2026, 11, 16, 9, 0, 0), new DateTime(2026, 11, 16, 9, 15, 0)));
+        var daily = new RepeatRule { Type = RepeatType.Daily };
+        Program.Equal("R1 Daily 11-16 13:52 + now 11-18 15:00 → 11-19 13:52", new DateTime(2026, 11, 19, 13, 52, 0),
+            RepeatEngine.NextAfter(daily, new DateTime(2026, 11, 16, 13, 52, 0), new DateTime(2026, 11, 18, 15, 0, 0)));
+
+        var doneRule = new RepeatRule { Type = RepeatType.Daily, MaxCount = 1, DoneCount = 1 };
+        Program.Check("R1 次数耗尽返回 null",
+            RepeatEngine.NextAfter(doneRule, DateTime.Now, DateTime.Now.AddDays(1)) == null);
+    }
+
+    private static void R2_ExitRouting()
+    {
+        var none = ScreenRemind.UI.ReminderAction.None;
+        Program.Equal("R2 ResolveAction(None,true)=Renew", ScreenRemind.UI.ReminderAction.Renew,
+            RepeatFlow.ResolveAction(none, true));
+        Program.Equal("R2 ResolveAction(None,false)=Snoozed", ScreenRemind.UI.ReminderAction.Snoozed,
+            RepeatFlow.ResolveAction(none, false));
+        Program.Equal("R2 ResolveAction(Acknowledged,true)=Acknowledged", ScreenRemind.UI.ReminderAction.Acknowledged,
+            RepeatFlow.ResolveAction(ScreenRemind.UI.ReminderAction.Acknowledged, true));
+        Program.Equal("R2 ResolveAction(Snoozed,false)=Snoozed", ScreenRemind.UI.ReminderAction.Snoozed,
+            RepeatFlow.ResolveAction(ScreenRemind.UI.ReminderAction.Snoozed, false));
+
+        var t0 = new DateTime(2026, 11, 16, 13, 52, 0);
+        var task = new RemindTask { Id = "r2", TriggerAt = t0, Repeat = new RepeatRule { Type = RepeatType.Daily } };
+        var next1 = RepeatFlow.Acknowledge(task, t0);
+        Program.Equal("R2 Ack next=11-17 13:52", new DateTime(2026, 11, 17, 13, 52, 0), next1);
+        Program.Equal("R2 Ack 后 DoneCount=1", 1, task.Repeat.DoneCount);
+        Program.Equal("R2 Ack 后 State=Done", TaskState.Done, task.State);
+        Program.Equal("R2 Ack 后 LastFiredAt", t0, task.LastFiredAt);
+
+        var follow = task.Clone();
+        follow.TriggerAt = next1!.Value;   // 模拟 AppController 建 follow
+        follow.State = TaskState.Pending;
+
+        var snoozeAt = new DateTime(2026, 11, 17, 13, 52, 0);
+        RepeatFlow.Snooze(follow, snoozeAt, 15, DeferKind.UserSnooze);
+        Program.Equal("R2 Snooze 后 PlanAnchor 不变（INV-1）", snoozeAt, follow.PlanAnchor);
+        Program.Equal("R2 Snooze 后 EffectiveTime=14:07", new DateTime(2026, 11, 17, 14, 7, 0), follow.EffectiveTime);
+        Program.Equal("R2 Snooze 不加 DoneCount", 1, follow.Repeat.DoneCount);
+        Program.Equal("R2 Snooze 来源=UserSnooze", DeferKind.UserSnooze, follow.DeferKind);
+
+        var next2 = RepeatFlow.Acknowledge(follow, new DateTime(2026, 11, 17, 14, 7, 0));
+        Program.Equal("R2 稍后确认仍回 13:52 相位（未被 14:07 带偏）", new DateTime(2026, 11, 18, 13, 52, 0), next2);
+
+        var follow2 = follow.Clone();
+        follow2.TriggerAt = next2!.Value;
+        follow2.SnoozeUntil = null;
+        var wake = new DateTime(2026, 11, 20, 15, 0, 0);
+        var n3 = RepeatFlow.Acknowledge(follow2, wake);
+        Program.Check("R2 休眠唤醒只补一次（next>now）", n3.HasValue && n3.Value > wake, $"n3={n3}");
+        Program.Equal("R2 休眠补弹后仍是 13:52 相位", new TimeSpan(13, 52, 0), n3!.Value.TimeOfDay);
+    }
+
+    private static void R3_QuietAnchor()
+    {
+        var cfg = new AppConfig { QuietEnabled = true, QuietStart = "23:00", QuietEnd = "08:00" };
+        var repo = new TaskRepository();
+        var task = new RemindTask
+        {
+            Id = "r3",
+            TriggerAt = new DateTime(2026, 11, 16, 23, 30, 0),
+            Repeat = new RepeatRule { Type = RepeatType.Daily }
+        };
+        repo.Add(task);
+        using var scheduler = new Scheduler(repo, () => cfg, () => new DateTime(2026, 11, 16, 23, 30, 0));
+        var due = 0;
+        scheduler.Due += (_, _) => due++;
+
+        scheduler.Tick(new DateTime(2026, 11, 16, 23, 30, 0));
+        var live = repo.Get("r3")!;
+        Program.Equal("R3 免打扰后 PlanAnchor 不变（INV-1）", new DateTime(2026, 11, 16, 23, 30, 0), live.PlanAnchor);
+        Program.Equal("R3 免打扰后 EffectiveTime=次日08:00", new DateTime(2026, 11, 17, 8, 0, 0), live.EffectiveTime);
+        Program.Equal("R3 免打扰来源=Quiet", DeferKind.Quiet, live.DeferKind);
+        Program.Equal("R3 免打扰当次不弹窗", 0, due);
+
+        scheduler.Tick(new DateTime(2026, 11, 17, 8, 0, 0));
+        Program.Equal("R3 顺延到期后弹一次", 1, due);
+
+        var live2 = repo.Get("r3")!;
+        var followAt = RepeatFlow.Acknowledge(live2, new DateTime(2026, 11, 17, 8, 0, 0));
+        Program.Equal("R3 确认后 follow 锚点仍是 23:30", new DateTime(2026, 11, 17, 23, 30, 0), followAt);
+    }
+
+    private static void R4_DoneCount()
+    {
+        var task = new RemindTask
+        {
+            Id = "r4",
+            TriggerAt = new DateTime(2026, 11, 16, 9, 0, 0),
+            Repeat = new RepeatRule { Type = RepeatType.Daily, MaxCount = 3 }
+        };
+        var n1 = RepeatFlow.Acknowledge(task, new DateTime(2026, 11, 16, 9, 0, 0));
+        Program.Equal("R4 Ack1 DoneCount=1", 1, task.Repeat.DoneCount);
+        Program.Check("R4 Ack1 仍有下一次", n1.HasValue);
+        var n2 = RepeatFlow.Acknowledge(task, new DateTime(2026, 11, 17, 9, 0, 0));
+        Program.Equal("R4 Ack2 DoneCount=2", 2, task.Repeat.DoneCount);
+        Program.Check("R4 Ack2 仍有下一次", n2.HasValue);
+        var n3 = RepeatFlow.Acknowledge(task, new DateTime(2026, 11, 18, 9, 0, 0));
+        Program.Equal("R4 Ack3 DoneCount=3", 3, task.Repeat.DoneCount);
+        Program.Check("R4 Ack3 触顶 → next=null", n3 == null);
+
+        var skip = new RemindTask
+        {
+            Id = "r4skip",
+            TriggerAt = new DateTime(2026, 11, 16, 9, 0, 0),
+            Repeat = new RepeatRule { Type = RepeatType.Daily }
+        };
+        var sn = RepeatFlow.SkipNext(skip, new DateTime(2026, 11, 16, 9, 0, 0));
+        Program.Equal("R4 SkipNext DoneCount 0→1", 1, skip.Repeat.DoneCount);
+        Program.Equal("R4 SkipNext 锚点前进一天", new DateTime(2026, 11, 17, 9, 0, 0), skip.TriggerAt);
+        Program.Check("R4 SkipNext 返回非空", sn.HasValue);
+
+        var repo = new TaskRepository();
+        repo.Add(new RemindTask
+        {
+            Id = "r4persist",
+            TriggerAt = DateTime.Now.AddDays(1),
+            Repeat = new RepeatRule { Type = RepeatType.Daily, DoneCount = 2 }
+        });
+        var reloaded = new TaskRepository().All().FirstOrDefault(t => t.Id == "r4persist");
+        Program.Check("R4 DoneCount 落盘闭环", reloaded != null && reloaded.Repeat.DoneCount == 2);
+    }
+
+    private static void R5_DirtyData()
+    {
+        Program.Check("R5 脏规则 Describe 不抛",
+            RepeatEngine.Describe(new RepeatRule { Type = RepeatType.Weekly, Weekdays = null! }) != null);
+        Program.Check("R5 脏规则 Validate 不抛且返回错误",
+            RepeatEngine.Validate(new RepeatRule { Type = RepeatType.YearMonths, Months = null! }) != null);
+
+        File.WriteAllText(AppPaths.TasksFile,
+            "{\"version\":1,\"tasks\":[{\"id\":\"dirty\",\"triggerAt\":\"2026-11-16T13:52:00\"," +
+            "\"repeat\":{\"type\":\"Weekly\",\"weekdays\":null,\"months\":null},\"state\":\"Pending\"}]}");
+        var loaded = new TaskRepository().All();
+        var dirty = loaded.FirstOrDefault(t => t.Id == "dirty");
+        Program.Check("R5 脏 tasks.json 不抛且能加载", dirty != null);
+        if (dirty != null)
+        {
+            Program.Equal("R5 weekdays=null 加载后 Count=0", 0, dirty.Repeat.Weekdays.Count);
+            Program.Equal("R5 months=null 加载后 Count=0", 0, dirty.Repeat.Months.Count);
+        }
+
+        var task = new RemindTask
+        {
+            Id = "clone",
+            DeferKind = DeferKind.Missed,
+            LastFiredAt = new DateTime(2026, 11, 16, 9, 0, 0)
+        };
+        var clone = task.Clone();
+        Program.Equal("R5 Clone 含 DeferKind", DeferKind.Missed, clone.DeferKind);
+        Program.Equal("R5 Clone 含 LastFiredAt", task.LastFiredAt, clone.LastFiredAt);
+    }
+
+    private static void R6_TimeJump()
+    {
+        var cfg = new AppConfig();
+        var repo = new TaskRepository();
+        repo.Add(new RemindTask
+        {
+            Id = "r6",
+            TriggerAt = new DateTime(2026, 11, 16, 9, 0, 0),
+            Repeat = new RepeatRule { Type = RepeatType.None }
+        });
+        using var scheduler = new Scheduler(repo, () => cfg, () => new DateTime(2026, 11, 16, 10, 0, 0));
+        var due = 0;
+        scheduler.Due += (_, _) => due++;
+
+        var now = new DateTime(2026, 11, 16, 10, 0, 0);
+        scheduler.Tick(now);
+        scheduler.Tick(now);
+        Program.Equal("R6 连续两次 Tick 只 Due 一次（_inflight 去重）", 1, due);
+
+        var threw = false;
+        try { scheduler.Tick(now.AddDays(-2)); } catch { threw = true; }
+        Program.Check("R6 时间回拨不抛异常", !threw);
+        Program.Equal("R6 回拨不产生额外 Due", 1, due);
+    }
+
+    private static void R7_BackupSafety()
+    {
+        AppPaths.EnsureAll();
+        var evilZip = Path.Combine(AppPaths.Data, "evil.zip");
+        using (var fs = new System.IO.FileStream(evilZip, System.IO.FileMode.Create))
+        using (var zip = new System.IO.Compression.ZipArchive(fs, System.IO.Compression.ZipArchiveMode.Create))
+        {
+            AddZipEntry(zip, "data/../../data_evil/x.txt", "pwned");
+            AddZipEntry(zip, "data/../data_evil2/y.txt", "pwned");
+        }
+        BackupService.Restore(evilZip, out var error1);
+        Program.Check("R7 恶意包被拒绝且无 restoring 错误", error1 == null, error1);
+        Program.Check("R7 路径穿越未越界（沙箱内）",
+            !File.Exists(Path.GetFullPath(Path.Combine(AppPaths.Root, "data_evil", "x.txt"))) &&
+            !File.Exists(Path.GetFullPath(Path.Combine(AppPaths.Root, "data_evil2", "y.txt"))));
+        Program.Check("R7 路径穿越未越界（父目录）",
+            !File.Exists(Path.GetFullPath(Path.Combine(AppPaths.Root, "..", "data_evil", "x.txt"))));
+
+        // 换入阶段制造必然失败：第二个条目的目标是已存在的目录
+        var probe = Path.Combine(AppPaths.Data, "rollback_probe.txt");
+        File.WriteAllText(probe, "old");
+        var blocker = Path.Combine(AppPaths.Data, "blocker_dir");
+        Directory.CreateDirectory(blocker);
+        var failZip = Path.Combine(AppPaths.Data, "fail.zip");
+        using (var fs = new System.IO.FileStream(failZip, System.IO.FileMode.Create))
+        using (var zip = new System.IO.Compression.ZipArchive(fs, System.IO.Compression.ZipArchiveMode.Create))
+        {
+            AddZipEntry(zip, "data/rollback_probe.txt", "new");
+            AddZipEntry(zip, "data/blocker_dir", "make-me-fail");
+        }
+        BackupService.Restore(failZip, out var error2);
+        Program.Check("R7 中途失败被感知", error2 != null, error2);
+        Program.Equal("R7 失败后主文件字节未变（回滚成功）", "old", File.ReadAllText(probe));
+    }
+
+    private static void AddZipEntry(System.IO.Compression.ZipArchive zip, string name, string content)
+    {
+        var entry = zip.CreateEntry(name);
+        using var writer = new StreamWriter(entry.Open());
+        writer.Write(content);
+    }
+}

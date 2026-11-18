@@ -11,25 +11,43 @@ namespace ScreenRemind;
 /// </summary>
 internal static class Diagnostics
 {
+    private static string? _prevHomeForRestore;
+
     /// <summary>
-    /// 自检模式不能去碰用户的数据目录（首次运行还没选过盘符），统一丢到临时目录里跑。
+    /// 诊断入口（Program.cs 的三个 --* 模式都调用它）。保留旧名兼容调用方，
+    /// 语义已改为「无条件」重定向：无论用户是否已配置数据盘、是否设过环境变量，
+    /// 诊断的所有文件操作都落在本次专属临时目录里，绝不碰用户真实数据（P1-R1）。
     /// 必须在任何 AppPaths.Root 访问之前调用。
     /// </summary>
     public static void UseTempDataIfUnset()
     {
-        if (AppPaths.HasEnvOverride || AppPaths.HasConfiguredRoot) return;
+        _prevHomeForRestore = UseTempDataForDiagnostics();
+    }
 
-        var temp = Path.Combine(Path.GetTempPath(), "ScreenRemindSelfCheck",
-            DateTime.Now.ToString("yyyyMMdd_HHmmss"));
-        try
-        {
-            Directory.CreateDirectory(temp);
-            Environment.SetEnvironmentVariable("SCREENREMIND_HOME", temp);
-        }
-        catch
-        {
-            // 连临时目录都建不了就让它退回 exe 目录，不阻断自检
-        }
+    /// <summary>
+    /// 无条件把数据根指向一个全新的诊断临时目录，并返回调用前的 SCREENREMIND_HOME
+    /// 供跑完恢复。与旧实现不同，这里不再因「已配置/已设环境变量」而提前返回——
+    /// 那正是 P1-R1 的根因：已配置机器上 --check 会回写真实 config.json 并生成 .bak。
+    /// </summary>
+    public static string? UseTempDataForDiagnostics()
+    {
+        var previous = Environment.GetEnvironmentVariable("SCREENREMIND_HOME");
+        var temp = Path.Combine(Path.GetTempPath(), "ScreenRemindDiagnostic",
+            DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + "_" + Guid.NewGuid().ToString("N")[..8]);
+        // 不吞异常：连临时目录都建不了时宁可让诊断明确失败，也不能退回真实数据目录写东西。
+        AppPaths.UseTempRoot(temp);
+        return previous;
+    }
+
+    /// <summary>诊断结束后恢复原数据根（进程通常直接退出，主要为自测/复用场景提供对称性）。</summary>
+    public static void RestoreDiagnosticData()
+    {
+        if (string.IsNullOrWhiteSpace(_prevHomeForRestore))
+            Environment.SetEnvironmentVariable("SCREENREMIND_HOME", null);
+        else
+            Environment.SetEnvironmentVariable("SCREENREMIND_HOME", _prevHomeForRestore);
+        AppPaths.ResetRootCache();
+        _prevHomeForRestore = null;
     }
 
     public static int Run()
@@ -42,6 +60,8 @@ internal static class Diagnostics
             if (!ok) failed++;
             lines.Add($"[{(ok ? "PASS" : "FAIL")}] {name}：{detail}");
         }
+
+        void AddUnknown(string name, string detail) => lines.Add($"[UNKNOWN] {name}：{detail}");
 
         lines.Add($"截图提醒 诊断报告　{DateTime.Now:yyyy-MM-dd HH:mm:ss}");
         lines.Add($"程序路径：{Environment.ProcessPath}");
@@ -63,7 +83,8 @@ internal static class Diagnostics
             Add("数据目录可写", false, ex.Message);
         }
 
-        // 2. 配置读写
+        // 2. 配置读写：UseTempDataForDiagnostics 已无条件把 Root 指向本次诊断专属临时目录，
+        //    无论用户是否已配置数据盘，这里读写的是临时副本，绝不写回真实 config.json（P1-R1）。
         try
         {
             var cfg = JsonStore.Load(AppPaths.ConfigFile, () => new AppConfig());
@@ -87,16 +108,24 @@ internal static class Diagnostics
             Add("任务数据加载", false, ex.Message);
         }
 
-        // 4. 全局热键可用性（试注册后立即释放，不影响用户已生效的热键）
+        // 4. 全局热键可用性（C-20：钩子模式事前探测不可靠，只报 UNKNOWN，不写回真实 config）
         try
         {
             var cfg = JsonStore.Load(AppPaths.ConfigFile, () => new AppConfig());
             var keys = cfg.Hotkey.EffectiveKeys();
-            var free = HotkeyManager.Probe(keys, out var engine);
-            var engineText = engine == HotkeyEngine.RegisterHotKey ? "系统注册" : "键盘钩子";
-            Add("快捷键可注册", free, free
-                ? $"{HotkeyText.Describe(keys)} 当前可用（{engineText}）"
-                : $"{HotkeyText.Describe(keys)} 已被占用，需在设置里换一个");
+            var engine = HotkeyManager.ChooseEngine(keys);
+            if (engine == HotkeyEngine.KeyboardHook)
+            {
+                AddUnknown("快捷键需实机按键验证",
+                    $"{HotkeyText.Describe(keys)} 走键盘钩子，事前无法判别占用（不计 FAIL，不写回配置）");
+            }
+            else
+            {
+                var free = HotkeyManager.Probe(keys, out _);
+                Add("快捷键可注册", free, free
+                    ? $"{HotkeyText.Describe(keys)} 当前可用（系统注册）"
+                    : $"{HotkeyText.Describe(keys)} 已被占用，需在设置里换一个");
+            }
         }
         catch (Exception ex)
         {
@@ -137,7 +166,7 @@ internal static class Diagnostics
         }
 
         lines.Add(string.Empty);
-        lines.Add(failed == 0 ? "结论：全部检查通过。" : $"结论：{failed} 项未通过，详见上面标记 FAIL 的行。");
+        lines.Add(failed == 0 ? "结论：全部检查通过（UNKNOWN 项需实机确认）。" : $"结论：{failed} 项未通过，详见上面标记 FAIL 的行。");
 
         var report = Path.Combine(AppPaths.Logs, $"selfcheck_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
         try
@@ -154,7 +183,8 @@ internal static class Diagnostics
     }
 
     /// <summary>判断截图不是全黑/全白（抓屏失败时常见的表现）。</summary>
-    private static bool IsNotBlank(Bitmap bmp)    {
+    private static bool IsNotBlank(Bitmap bmp)
+    {
         var first = bmp.GetPixel(bmp.Width / 2, bmp.Height / 2);
         var samples = new[]
         {
@@ -205,6 +235,16 @@ internal static class Diagnostics
                 form.DrawToBitmap(canvas, new Rectangle(0, 0, form.Width, form.Height));
                 canvas.Save(Path.Combine(dir, name + ".png"), System.Drawing.Imaging.ImageFormat.Png);
                 form.Hide();
+
+                // C-20：像素级断言——画面不能整幅都是同一种颜色（说明控件根本没画出来）
+                if (!HasVisibleContent(canvas))
+                {
+                    failed++;
+                    Log.Warn($"渲染像素断言失败：{name} 画面近乎空白");
+                }
+                var overflow = form.Controls.Cast<Control>()
+                    .Count(c => c.Right > form.ClientSize.Width + 2 || c.Bottom > form.ClientSize.Height + 2);
+                if (overflow > 0) Log.Warn($"渲染布局提示：{name} 有 {overflow} 个控件超出客户区");
                 Log.Info($"渲染自检通过：{name}（{form.Width}×{form.Height}）");
             }
             catch (Exception ex)
@@ -310,6 +350,21 @@ internal static class Diagnostics
         }
 
         return failed == 0 ? 0 : 4;
+    }
+
+    /// <summary>渲染像素断言：采样点里只要有一个与角落颜色不同，就说明控件确实画出来了。</summary>
+    private static bool HasVisibleContent(Bitmap bmp)
+    {
+        if (bmp.Width < 4 || bmp.Height < 4) return false;
+        var corner = bmp.GetPixel(1, 1);
+        var samples = new[]
+        {
+            bmp.GetPixel(bmp.Width / 2, bmp.Height / 2),
+            bmp.GetPixel(bmp.Width / 4, bmp.Height / 4),
+            bmp.GetPixel(bmp.Width * 3 / 4, bmp.Height / 3),
+            bmp.GetPixel(bmp.Width / 3, bmp.Height * 2 / 3)
+        };
+        return samples.Any(p => p != corner);
     }
 
     private static Bitmap MakeSampleImage()

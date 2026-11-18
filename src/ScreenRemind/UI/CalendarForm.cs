@@ -183,7 +183,7 @@ public sealed class CalendarForm : Form
                 var isToday = date.Date == DateTime.Today;
                 var isSelected = SelectedDate.HasValue && date.Date == SelectedDate.Value.Date;
 
-                using (var bg = new SolidBrush(inMonth ? Theme.Card : Color.FromArgb(238, 241, 246)))
+                using (var bg = new SolidBrush(inMonth ? Theme.Card : Theme.CalendarOff))
                 {
                     g.FillRectangle(bg, rect);
                 }
@@ -194,7 +194,7 @@ public sealed class CalendarForm : Form
                     g.DrawRectangle(pen, rect);
                 }
 
-                using var fg = new SolidBrush(inMonth ? Theme.Text : Color.FromArgb(170, 176, 190));
+                using var fg = new SolidBrush(inMonth ? Theme.Text : Theme.CalendarMuted);
                 g.DrawString(date.Day.ToString(), isToday ? todayFont : dayFont, fg, rect.X + 8, rect.Y + 6);
 
                 if (isToday)

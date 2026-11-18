@@ -96,15 +96,38 @@ public static class AutoStart
         }
     }
 
-    /// <summary>启动自检：快捷方式存在但目标失效 → 指向当前 exe 重写一遍。</summary>
-    public static void RepairIfStale()
+    /// <summary>
+    /// 启动自检：以「配置是否要求自启」为准，而不是被遗留快捷方式反向改写（C-19）。
+    /// 目标 exe 文件仍存在时不因“与当前 exe 不同”就重写，避免多副本互相抢占指向。
+    /// </summary>
+    public static void RepairIfStale(bool desiredEnabled)
     {
         try
         {
-            if (!File.Exists(ShortcutPath)) return;
-            if (IsHealthy()) return;
+            var exists = File.Exists(ShortcutPath);
+            if (!desiredEnabled)
+            {
+                if (exists)
+                {
+                    Log.Info("配置未开启自启，移除遗留快捷方式");
+                    Disable(out _);
+                }
+                return;
+            }
 
-            Log.Warn("检测到自启快捷方式指向旧路径，正在修复");
+            if (!exists)
+            {
+                Log.Info("配置要求开机自启但快捷方式缺失，正在创建");
+                Enable(out _);
+                return;
+            }
+
+            // 快捷方式存在：仅当它指向的文件确实已不存在时才重写指向
+            var target = ReadTarget(ShortcutPath);
+            var targetAlive = !string.IsNullOrWhiteSpace(target) && File.Exists(target);
+            if (targetAlive) return;
+
+            Log.Warn("自启快捷方式指向的文件已不存在，正在重建");
             Enable(out _);
         }
         catch (Exception ex)

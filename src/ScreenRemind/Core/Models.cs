@@ -30,6 +30,15 @@ public enum TaskState
     Done
 }
 
+/// <summary>一次性顺延的来源；仅用于文案与统计，不影响调度判定。</summary>
+public enum DeferKind
+{
+    None = 0,        // 无顺延（默认，旧数据兼容）
+    UserSnooze = 1,  // 用户点「稍后提醒」/关闭弹窗/Esc
+    Quiet = 2,       // 免打扰时段顺延
+    Missed = 3       // 休眠唤醒后的过期补弹
+}
+
 public enum PopupStrength
 {
     /// <summary>普通置顶</summary>
@@ -57,7 +66,7 @@ public sealed class RepeatRule
     public DateTime? Until { get; set; }
     /// <summary>总次数上限，null = 不限</summary>
     public int? MaxCount { get; set; }
-    /// <summary>已经触发过的次数</summary>
+    /// <summary>真实出口动作计数；被跳过的错过次数不计</summary>
     public int DoneCount { get; set; }
 
     public RepeatRule Clone() => new()
@@ -81,20 +90,31 @@ public sealed class RemindTask
     public string Image { get; set; } = string.Empty;
     public string Note { get; set; } = string.Empty;
     public DateTime CreatedAt { get; set; } = DateTime.Now;
-    /// <summary>计划提醒时间（不含稍后提醒）</summary>
+    /// <summary>
+    /// 计划锚点：用户设定的 wall-clock 相位，是重复序列的基准时刻。
+    /// 任何稍后/免打扰/补弹路径都不得写它；仅建任务与推进重复链时可写（INV-1）。
+    /// </summary>
     public DateTime TriggerAt { get; set; } = DateTime.Now;
+    /// <summary>计划锚点的只读别名，供新代码使用以提升可读性。</summary>
+    public DateTime PlanAnchor => TriggerAt;
     public RepeatRule Repeat { get; set; } = new();
     public TaskState State { get; set; } = TaskState.Pending;
     /// <summary>同一条提醒链（「继续设下一次」沿用同一 ChainId）</summary>
     public string ChainId { get; set; } = string.Empty;
     public DateTime? AckAt { get; set; }
+    /// <summary>本次一次性生效时刻：非 null 时覆盖 TriggerAt；处理完必须清空。</summary>
     public DateTime? SnoozeUntil { get; set; }
+    /// <summary>本次一次性顺延的来源，仅用于文案与统计。</summary>
+    public DeferKind DeferKind { get; set; } = DeferKind.None;
+    /// <summary>本次实际弹窗/处理时刻，用于 notBefore 依据与补弹识别。</summary>
+    public DateTime? LastFiredAt { get; set; }
     /// <summary>预提醒已发出的时间，避免重复轻提示</summary>
     public DateTime? PreNotifiedAt { get; set; }
     /// <summary>正式提醒前多少分钟轻提示，0 = 关闭</summary>
     public int PreNotifyMinutes { get; set; }
     public CaptureSource Source { get; set; } = CaptureSource.Region;
 
+    /// <summary>本次生效时刻 ?? 计划锚点。语义保持不变。</summary>
     public DateTime EffectiveTime => SnoozeUntil ?? TriggerAt;
 
     public RemindTask Clone() => new()
@@ -103,12 +123,15 @@ public sealed class RemindTask
         Image = Image,
         Note = Note,
         CreatedAt = CreatedAt,
+        // 计划锚点：保持不变，不得在出口处理中改写
         TriggerAt = TriggerAt,
         Repeat = Repeat.Clone(),
         State = State,
         ChainId = ChainId,
         AckAt = AckAt,
         SnoozeUntil = SnoozeUntil,
+        DeferKind = DeferKind,
+        LastFiredAt = LastFiredAt,
         PreNotifiedAt = PreNotifiedAt,
         PreNotifyMinutes = PreNotifyMinutes,
         Source = Source
@@ -136,7 +159,6 @@ public sealed class HotkeySetting
 {
     /// <summary>MOD_ALT=1 / MOD_CONTROL=2 / MOD_SHIFT=4 / MOD_WIN=8，可叠加</summary>
     public uint Modifiers { get; set; } = NativeHotkey.ModControl | NativeHotkey.ModAlt;
-    /// <summary>主键虚拟键码</summary>
     public uint Key { get; set; } = (uint)System.Windows.Forms.Keys.S;
     /// <summary>true = 走低级键盘钩子的「任意两键」模式（旧配置字段，保留兼容）</summary>
     public bool UseRawCombo { get; set; }

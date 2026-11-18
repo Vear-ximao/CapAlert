@@ -158,7 +158,12 @@ public sealed class ShotPanelForm : Form
 
         _discardBtn = Theme.DangerButton("丢弃");
         _discardBtn.SetBounds(0, 18, 78, 38);
-        _discardBtn.Click += (_, _) => Finish(new ShotPanelResult { Outcome = ShotOutcome.Discard });
+        _discardBtn.Click += (_, _) =>
+        {
+            // C-5：有标注时二次确认，避免误点丢失劳动成果
+            if (_annotated && !AskDiscard()) return;
+            Finish(new ShotPanelResult { Outcome = ShotOutcome.Discard });
+        };
         footer.Controls.Add(_discardBtn);
         Theme.PinRight(_discardBtn, 22);
 
@@ -288,8 +293,42 @@ public sealed class ShotPanelForm : Form
         Close();
     }
 
+    private bool AskDiscard() =>
+        MessageBox.Show(this, "已经做了标注，丢弃后无法找回。确定丢弃这次截图吗？", "丢弃截图",
+            MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes;
+
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
+        // C-5：直接关窗口/Alt+F4 都走这里。有标注时提供三个选择，而不是静默丢弃。
+        if (DialogResult != DialogResult.OK && _annotated)
+        {
+            var choice = MessageBox.Show(this,
+                "这次截图已经做了标注。\n\n「是」= 丢弃截图和标注\n「否」= 存到 shots 但不设提醒\n「取消」= 返回继续编辑",
+                "要丢弃这次截图吗？", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Warning);
+
+            if (choice == DialogResult.Cancel)
+            {
+                e.Cancel = true;
+                base.OnFormClosing(e);
+                return;
+            }
+            if (choice == DialogResult.No)
+            {
+                // 第三选项：留下图片，但不进入提醒流程
+                Result = new ShotPanelResult
+                {
+                    Outcome = ShotOutcome.SaveOnly,
+                    FinalImage = _current,
+                    OriginalImage = _original,
+                    Annotated = _annotated
+                };
+                _transferred = true;
+                DialogResult = DialogResult.OK;
+                base.OnFormClosing(e);
+                return;
+            }
+        }
+
         // 直接关窗口 = 丢弃（没有主动选择保存，就不该在磁盘上留垃圾）
         if (DialogResult != DialogResult.OK)
         {

@@ -34,6 +34,65 @@ public static class RepeatEngine
         return next;
     }
 
+    /// <summary>
+    /// 返回「规则相位网格」上严格晚于 notBefore 的第一次触发时刻。
+    /// 相位由 anchor 决定（Interval 的起算点；Daily/Weekly/Monthly/YearMonths 的 wall-clock 时刻与日/月相位），
+    /// 因此稍后、免打扰、休眠都不会造成漂移；结果恒 &gt; notBefore，杜绝连环补弹。
+    /// 返回 null 表示这条链按 Until/MaxCount 已走完。
+    /// </summary>
+    public static DateTime? NextAfter(RepeatRule rule, DateTime anchor, DateTime notBefore)
+    {
+        if (rule == null || rule.Type == RepeatType.None) return null;
+        if (rule.MaxCount.HasValue && rule.DoneCount >= rule.MaxCount.Value) return null;
+
+        // 快进游标：尽量靠近 notBefore，但「相位」完全取自 anchor，不改变规则语义。
+        var cursor = CoarseCursor(rule, anchor, notBefore);
+        if (cursor < anchor) cursor = anchor;
+
+        // 最多 96 步：YearMonths 内部已最多 48 个月，留足余量；正常 1~3 步即命中。
+        for (var i = 0; i < 96; i++)
+        {
+            var next = NextAfter(rule, cursor);          // 复用现有单步实现，规则逻辑零重复
+            if (next == null) return null;               // Until 越界 / 次数耗尽 / 无匹配
+            if (next.Value > notBefore) return next.Value;
+            cursor = next.Value;                         // 沿同一相位网格继续推进
+        }
+        Log.Warn("NextAfter 快进达到步数上限，规则=" + rule.Type);
+        return null;                                     // 防御性兜底，不可达
+    }
+
+    private static DateTime CoarseCursor(RepeatRule rule, DateTime anchor, DateTime notBefore)
+    {
+        if (notBefore <= anchor) return anchor;
+        return rule.Type switch
+        {
+            RepeatType.Interval => FastForwardInterval(anchor, rule, notBefore),
+            RepeatType.Daily => notBefore.Date.AddDays(-1) + anchor.TimeOfDay,
+            RepeatType.Weekly => notBefore.Date.AddDays(-7) + anchor.TimeOfDay,
+            RepeatType.Monthly => new DateTime(notBefore.Year, notBefore.Month, 1,
+                                                anchor.Hour, anchor.Minute, 0).AddMonths(-2),
+            RepeatType.YearMonths => new DateTime(notBefore.Year - 2, 1, 1,
+                                                anchor.Hour, anchor.Minute, 0),
+            _ => anchor
+        };
+    }
+
+    private static DateTime FastForwardInterval(DateTime anchor, RepeatRule rule, DateTime notBefore)
+    {
+        var value = Math.Max(1, rule.IntervalValue);
+        var stepTicks = rule.IntervalUnit switch
+        {
+            IntervalUnit.Minute => TimeSpan.FromMinutes(value).Ticks,
+            IntervalUnit.Hour => TimeSpan.FromHours(value).Ticks,
+            _ => TimeSpan.FromDays(value).Ticks
+        };
+        var elapsed = (notBefore - anchor).Ticks;
+        var steps = Math.Max(0L, elapsed / stepTicks - 1);          // 留 1 步余量给循环
+        var maxSteps = (DateTime.MaxValue.Ticks - anchor.Ticks) / stepTicks;
+        if (steps >= maxSteps) return DateTime.MaxValue.AddTicks(-stepTicks); // 触发循环内 NextAfter 返回 null
+        return anchor.AddTicks(steps * stepTicks);
+    }
+
     private static DateTime? AddInterval(DateTime anchor, RepeatRule rule)
     {
         var value = Math.Max(1, rule.IntervalValue);
@@ -117,6 +176,7 @@ public static class RepeatEngine
     /// <summary>把规则描述成一句中文，用于列表与弹窗展示。</summary>
     public static string Describe(RepeatRule rule)
     {
+        rule = Sanitize(rule);
         if (rule == null) return "不重复";
 
         var time = string.Empty;
@@ -156,6 +216,7 @@ public static class RepeatEngine
     /// <summary>校验规则是否可用，返回 null 表示通过。</summary>
     public static string? Validate(RepeatRule rule)
     {
+        rule = Sanitize(rule);
         if (rule == null) return "规则为空";
         switch (rule.Type)
         {
@@ -170,5 +231,22 @@ public static class RepeatEngine
         }
         if (rule.MaxCount is <= 0) return "总次数必须大于 0";
         return null;
+    }
+
+    /// <summary>返回规则的安全版本：null 规则→空规则；集合字段非 null 且过滤非法元素。幂等。</summary>
+    /// <remarks>
+    /// 只做不影响校验语义的归一化：集合初始化/元素过滤、DoneCount 非负。
+    /// IntervalValue / DayOfMonth / MaxCount 的合法性仍交给 Validate 判断（单步引擎内已各自 clamp/兜底），
+    /// 避免在此处“自动修正”导致 UI 输入错误被静默吞掉。
+    /// </remarks>
+    public static RepeatRule Sanitize(RepeatRule? rule)
+    {
+        rule ??= new RepeatRule();
+        rule.Weekdays ??= new List<int>();
+        rule.Months ??= new List<int>();
+        rule.Weekdays = rule.Weekdays.Where(d => d is >= 0 and <= 6).Distinct().ToList();
+        rule.Months = rule.Months.Where(m => m is >= 1 and <= 12).Distinct().ToList();
+        if (rule.DoneCount < 0) rule.DoneCount = 0;
+        return rule;
     }
 }

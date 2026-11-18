@@ -16,7 +16,11 @@ public sealed class ReminderForm : Form
     private readonly PopupStrength _strength;
     private readonly ImageViewer _viewer = new();
     private readonly Label _zoomLabel = new();
+    private readonly ToolTip _tooltips = new();   // C-21：备注过长时用悬浮提示展示全文
     private readonly List<string> _chainImages;
+    private readonly int _defaultSnoozeMinutes;
+    private readonly int _queueIndex;
+    private readonly int _queueTotal;
     private int _chainIndex;
     private Bitmap? _image;
 
@@ -24,13 +28,22 @@ public sealed class ReminderForm : Form
     public int SnoozeMinutes { get; private set; }
     /// <summary>「设置下一次」时由外部接管，弹窗自己关闭</summary>
     public bool RenewRequested { get; private set; }
+    /// <summary>C-6：队列里有多个提醒时，用户要求把当前与剩余全部顺延。</summary>
+    public bool SnoozeAll { get; private set; }
 
-    public ReminderForm(RemindTask task, PopupStrength strength, List<string>? chainImages = null)
+    /// <param name="defaultSnoozeMinutes">关闭弹窗/Esc 的默认顺延分钟数（C-7）。</param>
+    /// <param name="queueIndex">当前是队列里的第几个（从 1 开始）。</param>
+    /// <param name="queueTotal">本轮队列总数；大于 1 时显示序号与「全部稍后」。</param>
+    public ReminderForm(RemindTask task, PopupStrength strength, List<string>? chainImages = null,
+        int defaultSnoozeMinutes = 15, int queueIndex = 1, int queueTotal = 1)
     {
         _task = task;
         _strength = strength;
         _chainImages = chainImages ?? new List<string>();
         _chainIndex = Math.Max(0, _chainImages.IndexOf(task.Image));
+        _defaultSnoozeMinutes = Math.Clamp(defaultSnoozeMinutes, 1, 10080);
+        _queueIndex = Math.Max(1, queueIndex);
+        _queueTotal = Math.Max(_queueIndex, queueTotal);
 
         Theme.ApplyForm(this);
         Text = "该看这张图了";
@@ -61,6 +74,9 @@ public sealed class ReminderForm : Form
 
         BuildUi();
         LoadImage(task.Image);
+        _viewer.ProgressText = _chainImages.Count > 1
+            ? $"第 {_chainIndex + 1} / 共 {_chainImages.Count} 张"
+            : null;
     }
 
     private void BuildUi()
@@ -70,7 +86,7 @@ public sealed class ReminderForm : Form
         var title = new Label
         {
             Text = "提醒时间到了，看一眼这张图",
-            Font = new Font(Theme.FontFamily, 14F, FontStyle.Bold),
+            Font = Theme.Title,
             ForeColor = Theme.Text,
             AutoSize = true,
             Location = new Point(20, 12)
@@ -78,7 +94,13 @@ public sealed class ReminderForm : Form
         header.Controls.Add(title);
 
         var days = (DateTime.Now.Date - _task.CreatedAt.Date).Days;
-        var meta = $"触发于 {_task.TriggerAt:yyyy-MM-dd HH:mm}";
+        // C-6：多个提醒时显示进度；顺延过的任务用本次生效时刻，避免显示一个已过去的计划锚点
+        var meta = _queueTotal > 1 ? $"第 {_queueIndex} / 共 {_queueTotal} 个　·　" : string.Empty;
+        meta += $"触发于 {_task.EffectiveTime:yyyy-MM-dd HH:mm}";
+        if (_task.DeferKind != DeferKind.None)
+        {
+            meta += _task.DeferKind == DeferKind.Missed ? "　·　过期补弹" : "　·　已顺延";
+        }
         if (days > 0) meta += $"　·　距截图已 {days} 天";
 
         var metaLabel = new Label
@@ -104,6 +126,7 @@ public sealed class ReminderForm : Form
             };
             header.Controls.Add(note);
             Theme.PinRight(note, 120);
+            _tooltips.SetToolTip(note, _task.Note);   // C-21：备注再长也能看全
         }
 
         // 查看器（缩放提示做成查看区底部的一条状态栏，避免和备注、按钮抢位置）
@@ -115,7 +138,7 @@ public sealed class ReminderForm : Form
         _zoomLabel.AutoSize = false;
         _zoomLabel.TextAlign = ContentAlignment.MiddleLeft;
         _zoomLabel.Padding = new Padding(6, 0, 0, 0);
-        _zoomLabel.ForeColor = Color.FromArgb(170, 176, 188);
+        _zoomLabel.ForeColor = Theme.ViewerText;
         _zoomLabel.BackColor = Theme.ViewerBg;
 
         _viewer.Dock = DockStyle.Fill;
@@ -132,7 +155,7 @@ public sealed class ReminderForm : Form
         ack.Width = 160;
         ack.Height = 40;
         ack.BackColor = Theme.Success;
-        ack.FlatAppearance.MouseOverBackColor = Color.FromArgb(16, 140, 60);
+        ack.FlatAppearance.MouseOverBackColor = Theme.SuccessHover;
         ack.Location = new Point(20, 14);
         ack.Click += (_, _) =>
         {
@@ -156,10 +179,28 @@ public sealed class ReminderForm : Form
         renew.Click += (_, _) =>
         {
             RenewRequested = true;
+            Action = ReminderAction.Renew;   // C-1：显式置 Action，ResolveAction 不再靠死代码兜底
             DialogResult = DialogResult.OK;
             Close();
         };
         footer.Controls.Add(renew);
+
+        if (_queueTotal > 1)
+        {
+            var allSnooze = Theme.GhostButton($"全部稍后（{_queueTotal} 个）");
+            allSnooze.Width = 150;
+            allSnooze.Height = 40;
+            allSnooze.Location = new Point(490, 14);
+            allSnooze.Click += (_, _) =>
+            {
+                SnoozeAll = true;
+                Action = ReminderAction.Snoozed;
+                SnoozeMinutes = _defaultSnoozeMinutes;
+                DialogResult = DialogResult.OK;
+                Close();
+            };
+            footer.Controls.Add(allSnooze);
+        }
 
         var openDir = new LinkLabel
         {
@@ -187,19 +228,9 @@ public sealed class ReminderForm : Form
             Theme.PinRight(prev, 286);
         }
 
-        if (_strength == PopupStrength.Mask)
-        {
-            // 遮罩模式：整体铺满，内部卡片化
-            Controls.Add(viewerHost);
-            Controls.Add(header);
-            Controls.Add(footer);
-        }
-        else
-        {
-            Controls.Add(viewerHost);
-            Controls.Add(header);
-            Controls.Add(footer);
-        }
+        Controls.Add(viewerHost);
+        Controls.Add(header);
+        Controls.Add(footer);
     }
 
     private void ShowSnoozeMenu(Control anchor)
@@ -216,7 +247,7 @@ public sealed class ReminderForm : Form
         var custom = new ToolStripMenuItem("自定义分钟…");
         custom.Click += (_, _) =>
         {
-            var input = InputDialog.Prompt(this, "稍后提醒", "多少分钟后再提醒我？", "45");
+            var input = InputDialog.Prompt(this, "稍后提醒", "多少分钟后再提醒我？", _defaultSnoozeMinutes.ToString());
             if (input == null) return;
             if (!int.TryParse(input, out var minutes) || minutes < 1 || minutes > 10080)
             {
@@ -264,6 +295,7 @@ public sealed class ReminderForm : Form
         if (_chainImages.Count <= 1) return;
         _chainIndex = (_chainIndex + delta + _chainImages.Count) % _chainImages.Count;
         LoadImage(_chainImages[_chainIndex]);
+        _viewer.ProgressText = $"第 {_chainIndex + 1} / 共 {_chainImages.Count} 张";
     }
 
     private void LoadImage(string relativePath)
@@ -317,11 +349,14 @@ public sealed class ReminderForm : Form
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
-        // 常规关闭 = 稍后提醒，杜绝「提醒被误关而丢失」
-        if (Action == ReminderAction.None && !RenewRequested)
+        // 兜底：Action 仍是 None 时按「设置下一次」请求分流，否则一律视为稍后（C-1/C-7）
+        if (Action == ReminderAction.None)
         {
-            Action = ReminderAction.Snoozed;
-            SnoozeMinutes = 15;
+            Action = RenewRequested ? ReminderAction.Renew : ReminderAction.Snoozed;
+        }
+        if (Action == ReminderAction.Snoozed && SnoozeMinutes <= 0)
+        {
+            SnoozeMinutes = _defaultSnoozeMinutes;
         }
         base.OnFormClosing(e);
     }
@@ -331,7 +366,7 @@ public sealed class ReminderForm : Form
         base.OnKeyDown(e);
         if (e.KeyCode == Keys.Escape && _strength != PopupStrength.Mask)
         {
-            DoSnooze(15);
+            DoSnooze(_defaultSnoozeMinutes);   // C-7：Esc 也用配置的默认分钟数
         }
         else if (e.KeyCode == Keys.Enter && e.Control)
         {
@@ -345,6 +380,7 @@ public sealed class ReminderForm : Form
     {
         if (disposing)
         {
+            _tooltips.Dispose();
             _image?.Dispose();
         }
         base.Dispose(disposing);

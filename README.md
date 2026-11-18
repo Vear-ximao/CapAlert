@@ -29,7 +29,7 @@ no installer, no network, no telemetry. The UI is in Chinese.*
 - 全局快捷键触发，**任意组合**都能录：`Ctrl+Alt+S`、`Ctrl+Alt`、`A+S`、`Ctrl+Shift+F1`（最多 4 键）
 - 框选时铺一层冻结画面，所见即所裁；回车=整屏，`W`=当前窗口，Esc=取消
 - 多显示器、高分屏（Per-Monitor V2）按**物理像素**裁切，不糊不偏
-- 截图前自动隐藏自身窗口，不会截到自己
+- 截图前自动最小化自身窗口，不会截到自己，也不影响「W 截当前窗口」判定
 
 ### 提醒
 - 相对时间（N 分钟/小时后）与绝对时间（年月日时分）
@@ -76,7 +76,7 @@ no installer, no network, no telemetry. The UI is in Chinese.*
 
 > **系统要求**：Windows 10 1607 及以上 / Windows 11，**64 位**。不需要安装 .NET 或任何运行库（exe 已自包含）。
 
-1. 到 [Releases](../../releases) 下载 `CapAlert-v1.3.1-win-x64.zip`
+1. 到 [Releases](../../releases) 下载 `CapAlert-v1.3.2-win-x64.zip`
 2. 解压到任意位置（桌面、D 盘、U 盘都行），双击 `截图提醒.exe`
 3. 首次启动会问数据存哪块盘 → 选盘 → 自动建 `D:\截图提醒`
 4. 按 `Ctrl+Alt+S` 开始截图；图标常驻右下角托盘
@@ -114,8 +114,8 @@ dotnet publish src/ScreenRemind/ScreenRemind.csproj -c Release -o out
 | 快速排提醒 | 处理面板顶部：1 小时 / 3 小时 / 24 小时 / 下班前 |
 | 标注快捷键 | `Ctrl+Z` 撤销、`Ctrl+Y` 重做、`Ctrl+Delete` 清空 |
 | 看图 | 滚轮缩放、拖动平移、双击 1:1、`R` 旋转、`←/→` 换图 |
-| 关闭提醒弹窗 | = 稍后 15 分钟（防止误关丢提醒） |
-| 关掉处理面板 | = 丢弃本次截图（不落盘） |
+| 关闭提醒弹窗 | = 稍后 N 分钟（默认 15，可在设置改，防止误关丢提醒） |
+| 关掉处理面板 | = 丢弃本次截图（有标注时二次确认，可选只存图） |
 
 ---
 
@@ -156,7 +156,8 @@ dotnet run --project tests/SelfTest/SelfTest.csproj
 ```
 
 自检覆盖的边界包括：每月 31 号在小月自动落到 30/28 号、闰年 2 月 29、跨年回绕、
-`tasks.json` 损坏自动用 `.bak` 恢复、免打扰跨零点、左右 Ctrl 键归一化、备份还原。
+`tasks.json` 损坏自动用 `.bak` 恢复、免打扰跨零点与锚点不漂移、左右 Ctrl 键归一化、
+备份还原（路径越界拒绝与失败回滚）、出口状态流转与「下一次」严格晚于当前。
 
 ---
 

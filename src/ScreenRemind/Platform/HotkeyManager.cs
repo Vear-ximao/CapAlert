@@ -21,6 +21,8 @@ public sealed class HotkeyManager : IDisposable
 {
     private const int HotkeyId = 0xB10;
     private const int WmAppFire = 0x8001;
+    private const int WmKillFocus = 0x0087;
+    private const int PressedTimeoutSeconds = 5;
 
     /// <summary>单实例唤醒：向所有顶层窗口广播，只有本程序的隐藏窗口认这条消息。</summary>
     public static readonly uint WakeMessage = NativeMethods.RegisterWindowMessage("ScreenRemind_Wake_9F3C");
@@ -33,6 +35,7 @@ public sealed class HotkeyManager : IDisposable
     private HashSet<uint> _hookKeys = new();
     private bool _matched;
     private DateTime _lastFire = DateTime.MinValue;
+    private DateTime _lastKeyDown = DateTime.MinValue;
     private HotkeySetting _setting = new();
 
     public HotkeyEngine Engine { get; private set; } = HotkeyEngine.RegisterHotKey;
@@ -143,16 +146,26 @@ public sealed class HotkeyManager : IDisposable
             _hook = IntPtr.Zero;
         }
         _hookProc = null;
+        ClearPressed();
         lock (_gate)
         {
-            _pressed.Clear();
             _hookKeys.Clear();
-            _matched = false;
         }
         if (_window.Handle != IntPtr.Zero)
         {
             NativeMethods.UnregisterHotKey(_window.Handle, HotkeyId);
         }
+    }
+
+    /// <summary>清空半按状态。应用失焦、钩子卸载、按键超时都会调用（C-18）。</summary>
+    private void ClearPressed()
+    {
+        lock (_gate)
+        {
+            _pressed.Clear();
+            _matched = false;
+        }
+        _lastKeyDown = DateTime.MinValue;
     }
 
     private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
@@ -166,6 +179,14 @@ public sealed class HotkeyManager : IDisposable
 
             if (isDown)
             {
+                // C-18：keyup 丢失（切出应用、远程桌面等）时，超时后清掉半按状态，避免误触发
+                var now = DateTime.Now;
+                if (_lastKeyDown != DateTime.MinValue && (now - _lastKeyDown).TotalSeconds > PressedTimeoutSeconds)
+                {
+                    ClearPressed();
+                }
+                _lastKeyDown = now;
+
                 bool fire = false;
                 lock (_gate)
                 {
@@ -250,6 +271,11 @@ public sealed class HotkeyManager : IDisposable
                 {
                     _owner.WakeRequested?.Invoke(_owner, EventArgs.Empty);
                     return;
+                }
+                // C-18：本程序窗口失焦时清掉半按状态，防止切走期间残留的按键组合误触发
+                if (m.Msg == WmKillFocus)
+                {
+                    _owner.ClearPressed();
                 }
             }
             base.WndProc(ref m);

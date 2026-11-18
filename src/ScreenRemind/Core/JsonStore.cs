@@ -75,7 +75,7 @@ public static class JsonStore
 
     public static bool Save<T>(string path, T value)
     {
-        var tmp = path + ".tmp";
+        var tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";  // 多实例并发写不互相踩临时文件
         var bak = path + ".bak";
         try
         {

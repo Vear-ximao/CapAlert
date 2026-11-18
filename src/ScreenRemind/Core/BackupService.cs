@@ -51,26 +51,61 @@ public static class BackupService
         return count;
     }
 
-    /// <summary>还原：把 zip 里的 data/ 与 shots/ 解压回程序目录，覆盖同名文件。</summary>
+    /// <summary>
+    /// 还原：先解压到隔离目录校验全部条目，再逐个换入；任一失败按换入前快照回滚（C-14/C-16）。
+    /// </summary>
     public static int Restore(string zipPath, out string? error)
     {
         error = null;
         var restored = 0;
+        var root = Path.GetFullPath(AppPaths.Root);
+        var staging = Path.Combine(root, "backups", ".restore_tmp_" + Guid.NewGuid().ToString("N"));
+        var staged = new List<(string Temp, string Target)>();
+        var snapshots = new List<(string Target, byte[]? Bytes)>();
+
         try
         {
-            using var zip = ZipFile.OpenRead(zipPath);
-            foreach (var entry in zip.Entries)
+            Directory.CreateDirectory(Path.GetDirectoryName(staging)!);
+
+            // 阶段一：解压到隔离目录并做路径穿越双重校验（不触碰任何主数据）
+            using (var zip = ZipFile.OpenRead(zipPath))
             {
-                if (string.IsNullOrEmpty(entry.Name)) continue;   // 目录项
-                var target = Path.GetFullPath(Path.Combine(AppPaths.Root, entry.FullName));
-                // 防目录穿越
-                if (!target.StartsWith(Path.GetFullPath(AppPaths.Root), StringComparison.OrdinalIgnoreCase))
+                foreach (var entry in zip.Entries)
                 {
-                    Log.Warn("备份包内存在越界路径，已跳过：" + entry.FullName);
-                    continue;
+                    if (string.IsNullOrEmpty(entry.Name)) continue;   // 目录项
+                    if (!IsSafeEntry(entry.FullName))
+                    {
+                        Log.Warn("备份包内存在越界路径，已拒绝：" + entry.FullName);
+                        continue;
+                    }
+
+                    var target = Path.GetFullPath(Path.Combine(root, entry.FullName));
+                    if (!IsUnderRoot(root, target))
+                    {
+                        Log.Warn("备份包内路径越界，已拒绝：" + entry.FullName);
+                        continue;
+                    }
+
+                    var temp = Path.GetFullPath(Path.Combine(staging, entry.FullName));
+                    if (!IsUnderRoot(Path.GetFullPath(staging), temp))
+                    {
+                        Log.Warn("备份包内路径越界（暂存区），已拒绝：" + entry.FullName);
+                        continue;
+                    }
+
+                    Directory.CreateDirectory(Path.GetDirectoryName(temp)!);
+                    entry.ExtractToFile(temp, true);
+                    staged.Add((temp, target));
                 }
+            }
+
+            // 阶段二：逐个换入；换入前记录快照，失败时逆序回滚
+            foreach (var (temp, target) in staged)
+            {
+                snapshots.Add((target, File.Exists(target) ? File.ReadAllBytes(target) : null));
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                entry.ExtractToFile(target, true);
+                if (File.Exists(target)) File.Replace(temp, target, null, true);
+                else File.Move(temp, target);
                 restored++;
             }
             Log.Info($"还原完成：{restored} 个文件 ← {Path.GetFileName(zipPath)}");
@@ -78,8 +113,51 @@ public static class BackupService
         catch (Exception ex)
         {
             error = ex.Message;
-            Log.Error("还原失败", ex);
+            Log.Error("还原失败，正在回滚", ex);
+            for (var i = snapshots.Count - 1; i >= 0; i--)
+            {
+                var (target, bytes) = snapshots[i];
+                try
+                {
+                    if (bytes == null)
+                    {
+                        if (File.Exists(target)) File.Delete(target);
+                    }
+                    else
+                    {
+                        File.WriteAllBytes(target, bytes);
+                    }
+                }
+                catch (Exception rollbackEx)
+                {
+                    Log.Error($"回滚失败：{target}", rollbackEx);
+                }
+            }
+            restored = 0;   // 已全部回滚，不对外报告“部分成功”
+        }
+        finally
+        {
+            try { if (Directory.Exists(staging)) Directory.Delete(staging, true); } catch { }
         }
         return restored;
+    }
+
+    /// <summary>拒绝绝对路径、盘符/冒号与任何 .. 段（C-14）。</summary>
+    private static bool IsSafeEntry(string fullName)
+    {
+        if (string.IsNullOrWhiteSpace(fullName)) return false;
+        var normalized = fullName.Replace('\\', '/');
+        if (normalized.StartsWith('/') || normalized.Contains(':')) return false;
+        var segments = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length > 0 && segments.All(s => s != "..");
+    }
+
+    /// <summary>根路径补尾分隔符再比较，避免 C:\root2 被误判为位于 C:\root 下（C-14）。</summary>
+    private static bool IsUnderRoot(string root, string candidate)
+    {
+        var prefix = root.EndsWith(Path.DirectorySeparatorChar)
+            ? root
+            : root + Path.DirectorySeparatorChar;
+        return candidate.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
     }
 }
