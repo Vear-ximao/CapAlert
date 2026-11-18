@@ -76,7 +76,7 @@ no installer, no network, no telemetry. The UI is in Chinese.*
 
 > **系统要求**：Windows 10 1607 及以上 / Windows 11，**64 位**。不需要安装 .NET 或任何运行库（exe 已自包含）。
 
-1. 到 [Releases](../../releases) 下载 `CapAlert-v1.3.2-win-x64.zip`
+1. 到 [Releases](../../releases) 下载 `CapAlert-v1.3.3-win-x64.zip`
 2. 解压到任意位置（桌面、D 盘、U 盘都行），双击 `截图提醒.exe`
 3. 首次启动会问数据存哪块盘 → 选盘 → 自动建 `D:\截图提醒`
 4. 按 `Ctrl+Alt+S` 开始截图；图标常驻右下角托盘

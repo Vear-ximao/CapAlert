@@ -11,7 +11,7 @@
     <RootNamespace>ScreenRemind</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>assets\app.ico</ApplicationIcon>
-    <Version>1.3.2</Version>
+    <Version>1.3.3</Version>
     <Product>截图提醒</Product>
     <Company>Vear-ximao</Company>
     <Copyright>© 2026 Vear-ximao</Copyright>
